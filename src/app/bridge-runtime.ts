@@ -25,6 +25,8 @@ import {
     type SillyTavernContext,
 } from '../host/api';
 import { createBridgeClient, type BridgeClient, type InboundMessage } from '../host/bridge-client';
+import { getAgentSessionsApi } from '../host/api';
+import { ensureSession, runSessionTurn } from './agent-session-runner';
 import { stripThoughtTags, type WechatBridgeSettings } from './settings';
 
 export type BridgePhase = 'idle' | 'sending' | 'generating' | 'error';
@@ -50,6 +52,26 @@ export interface BridgeState {
 const MAX_LOGS = 200;
 /** Grace period after GENERATION_ENDED before treating a run as lost. */
 const LOST_RUN_GRACE_MS = 2500;
+
+/**
+ * Hard cap on a WeChat-triggered run, independent of which host events fire.
+ * Session runs with many tool calls routinely take minutes (a 19-tool-call
+ * turn was observed at ~2m10s), so this is deliberately generous.
+ */
+const RUN_TIMEOUT_MS = 300_000;
+
+/**
+ * Agent runs report completion/failure through a window CustomEvent, NOT via
+ * eventSource. Without this, a failed Agent run leaves the bridge busy forever
+ * because no generation event is ever emitted for it.
+ */
+const AGENT_RUN_EVENT = 'tauritavern-agent-run-event';
+const AGENT_TERMINAL_EVENTS = new Set([
+    'run_completed',
+    'run_partial_success',
+    'run_cancelled',
+    'run_failed',
+]);
 
 export interface BridgeRuntime {
     state: BridgeState;
@@ -96,6 +118,8 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
 
     /** Set only while a WeChat-triggered generation is in flight. */
     let wechatRun: WechatRun | null = null;
+    /** Hard watchdog so a run can never wedge the bridge. */
+    let runWatchdog: ReturnType<typeof setTimeout> | null = null;
 
     function enqueue(fn: () => Promise<void>): Promise<void> {
         lifecycle = lifecycle.catch(() => {}).then(fn);
@@ -124,24 +148,122 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
         }
     }
 
-    /** Feed one WeChat message into the chat as a user message, then trigger. */
+    function clearWatchdog(): void {
+        if (runWatchdog) {
+            clearTimeout(runWatchdog);
+            runWatchdog = null;
+        }
+    }
+
+    /** Hard cap: never let a run keep the bridge busy indefinitely. */
+    function armWatchdog(): void {
+        clearWatchdog();
+        runWatchdog = setTimeout(() => {
+            runWatchdog = null;
+            if (!wechatRun) return;
+            failRun(`生成超时（${Math.round(RUN_TIMEOUT_MS / 1000)} 秒未完成）`);
+        }, RUN_TIMEOUT_MS);
+    }
+
+    /**
+     * Abort the current WeChat run, release the busy state and tell WeChat.
+     * Used for failures, cancellations and watchdogs so the bridge can never wedge.
+     */
+    function failRun(reason: string): void {
+        const run = wechatRun;
+        wechatRun = null;
+        clearWatchdog();
+        state.busy = false;
+        state.phase = 'error';
+        state.lastError = reason;
+        log('error', `Run aborted: ${reason}`);
+        if (run) {
+            void pushOutbound(`[桥接] ${reason}`, run.target);
+        }
+        // Drain anything queued while we were busy.
+        if (queue.length > 0) {
+            const next = queue.shift();
+            if (next) void enqueue(() => deliverToChat(next));
+        }
+    }
+
+    /** Route one WeChat message according to the configured delivery mode. */
     async function deliverToChat(msg: InboundMessage): Promise<void> {
+        if (settings.value.mode === 'session') {
+            await deliverToSession(msg);
+            return;
+        }
+        await deliverToCharacterChat(msg);
+    }
+
+    /** chat mode: user message into the current chat, then trigger generation. */
+    async function deliverToCharacterChat(msg: InboundMessage): Promise<void> {
         if (!ctx) throw new Error('SillyTavern context unavailable');
         wechatRun = { target: msg.from };
         state.busy = true;
         state.phase = 'generating';
+        armWatchdog();
         try {
             await runSlashCommand(ctx, `/send ${quoteForSlashCommand(msg.text)}`);
-            await runSlashCommand(ctx, '/trigger');
+            // await=true makes /trigger reject when the run fails to start.
+            // Without it the failure is only logged and the bridge waits for
+            // the watchdog instead of telling WeChat immediately.
+            await runSlashCommand(ctx, '/trigger await=true');
             log('info', `Injected message from ${msg.from} and triggered generation.`);
         } catch (err) {
-            const target = wechatRun?.target;
+            failRun(`注入聊天失败：${String(err)}`);
+        }
+    }
+
+    /**
+     * session mode: run the message against the dedicated in-app assistant
+     * session, then push the reply straight to WeChat.
+     */
+    async function deliverToSession(msg: InboundMessage): Promise<void> {
+        const sessions = getAgentSessionsApi();
+        if (!sessions) {
+            failRun('应用内助手 API 不可用（api.agent.sessions 缺失）。');
+            return;
+        }
+        wechatRun = { target: msg.from };
+        state.busy = true;
+        state.phase = 'generating';
+        // No wall-clock watchdog here: the session runner polls the run until
+        // the host reports it finished, so a long tool-heavy turn is expected
+        // and must not be cut short.
+        log('info', `Session turn for ${msg.from}.`);
+        const streaming = settings.value.sessionDelivery === 'stream';
+        if (streaming) {
+            log('info', '会话增量模式：助手每条输出都会转发微信。');
+        }
+        try {
+            const session = await ensureSession(sessions, settings.value.sessionTitle);
+            const result = await runSessionTurn(sessions, session.id, msg.text, {
+                // In stream mode forward each assistant message as it appears;
+                // in final mode the closing answer is sent once at the end.
+                onAssistantText: streaming
+                    ? (text) => {
+                          const run = wechatRun;
+                          if (!run) return;
+                          void enqueue(() => pushOutbound(text, run.target));
+                      }
+                    : undefined,
+            });
+            if (!result.ok) {
+                failRun(result.error);
+                return;
+            }
+            const run = wechatRun;
             wechatRun = null;
+            clearWatchdog();
             state.busy = false;
-            state.phase = 'error';
-            state.lastError = String(err);
-            log('error', `Injection failed: ${String(err)}`);
-            void pushOutbound(`[桥接错误] 注入聊天失败：${String(err)}`, target);
+            if (run && !streaming) await pushOutbound(result.text, run.target);
+            if (queue.length > 0) {
+                const next = queue.shift();
+                if (next) void enqueue(() => deliverToChat(next));
+            }
+        } catch (err) {
+            failRun(`助手会话运行失败：${String(err)}`);
         }
     }
 
@@ -152,6 +274,7 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
         if (text === null) return;
         const target = wechatRun.target;
         wechatRun = null;
+        clearWatchdog();
         void enqueue(async () => {
             await pushOutbound(text, target);
             state.busy = false;
@@ -201,6 +324,36 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
         }, LOST_RUN_GRACE_MS);
     }
 
+    /**
+     * Watch Agent run terminal events.
+     *
+     * Agent runs dispatch a window CustomEvent instead of eventSource events,
+     * so a failed run (e.g. model.output_truncated) would otherwise never
+     * release the busy state.
+     */
+    function handleAgentRunEvent(rawEvent: Event): void {
+        const detail = (rawEvent as CustomEvent).detail as { event?: { type?: string } } | undefined;
+        const type = detail?.event?.type;
+        if (!type || !AGENT_TERMINAL_EVENTS.has(type)) return;
+
+        if (!wechatRun) {
+            // Not our run, but keep the bridge responsive.
+            if (type === 'run_failed' || type === 'run_cancelled') {
+                state.busy = false;
+                clearWatchdog();
+            }
+            return;
+        }
+
+        if (type === 'run_failed') {
+            failRun('生成失败，请稍后重试。');
+        } else if (type === 'run_cancelled') {
+            failRun('生成已被取消。');
+        }
+        // run_completed / run_partial_success: MESSAGE_RECEIVED normally
+        // delivers the reply first; the watchdog covers the rest.
+    }
+
     function bindHostEvents(): void {
         if (!ctx || eventsBound) return;
         eventsBound = true;
@@ -215,18 +368,14 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
         onHostEvent(ctx, 'GENERATION_ENDED', () => {
             handleGenerationEnded();
         });
+        window.addEventListener(AGENT_RUN_EVENT, handleAgentRunEvent);
         onHostEvent(ctx, 'GENERATION_STOPPED', () => {
             // User pressed stop: drop the run instead of waiting for the watchdog.
             if (!wechatRun) {
                 state.busy = false;
                 return;
             }
-            const target = wechatRun.target;
-            wechatRun = null;
-            state.busy = false;
-            state.phase = 'idle';
-            log('warn', 'Generation stopped by user.');
-            void pushOutbound('[桥接] 生成已被停止。', target);
+            failRun('生成已被停止。');
         });
     }
 
@@ -322,6 +471,8 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
         },
         dispose() {
             stopPolling();
+            clearWatchdog();
+            window.removeEventListener(AGENT_RUN_EVENT, handleAgentRunEvent);
             client?.dispose();
             client = null;
         },

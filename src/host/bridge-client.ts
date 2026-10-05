@@ -19,9 +19,22 @@ export interface BridgeClientOptions {
     fetchImpl?: typeof fetch;
 }
 
+export interface BridgeStatus {
+    ok: boolean;
+    mode?: string;
+    account?: string | null;
+    pending: number;
+    polls?: number;
+    users?: number;
+    lastError?: string | null;
+}
+
 export interface BridgeClient {
     poll: () => Promise<InboundMessage[]>;
+    /** Non-destructive read of recent messages (does not consume the queue). */
+    read: (limit?: number) => Promise<InboundMessage[]>;
     send: (input: { text: string; userId?: string }) => Promise<void>;
+    status: () => Promise<BridgeStatus>;
     dispose: () => void;
 }
 
@@ -40,6 +53,24 @@ export function createBridgeClient(options: Partial<BridgeClientOptions> = {}): 
         return Array.isArray(data.messages) ? data.messages : [];
     }
 
+    async function read(limit?: number): Promise<InboundMessage[]> {
+        const query = limit && limit > 0 ? `?limit=${encodeURIComponent(String(limit))}` : '';
+        const res = await fetchImpl(`${baseUrl}/messages${query}`, { method: 'GET' });
+        if (!res.ok) {
+            throw new Error(`bridge read failed: HTTP ${res.status}`);
+        }
+        const data = (await res.json()) as { messages?: InboundMessage[] };
+        return Array.isArray(data.messages) ? data.messages : [];
+    }
+
+    async function status(): Promise<BridgeStatus> {
+        const res = await fetchImpl(`${baseUrl}/health`, { method: 'GET' });
+        if (!res.ok) {
+            throw new Error(`bridge status failed: HTTP ${res.status}`);
+        }
+        return (await res.json()) as BridgeStatus;
+    }
+
     async function send(input: { text: string; userId?: string }): Promise<void> {
         const res = await fetchImpl(`${baseUrl}/send`, {
             method: 'POST',
@@ -53,7 +84,9 @@ export function createBridgeClient(options: Partial<BridgeClientOptions> = {}): 
 
     return {
         poll,
+        read,
         send,
+        status,
         dispose() {
             /* no persistent resources */
         },

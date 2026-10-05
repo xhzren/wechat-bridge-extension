@@ -35,6 +35,17 @@ declare global {
         };
         __TAURITAVERN__?: {
             ready?: Promise<void> | null;
+            api?: {
+                agent?: {
+                    tools?: AgentToolRegistrationApi;
+                    sessions?: AgentSessionsApi;
+                    readEvents?: (input: {
+                        runId: string;
+                        afterSeq?: number;
+                        limit?: number;
+                    }) => Promise<{ events: Array<{ type?: string; payload?: unknown }> }>;
+                };
+            };
         };
         __TAURITAVERN_MAIN_READY__?: Promise<void>;
     }
@@ -48,6 +59,123 @@ export const EVENT = {
     MESSAGE_RECEIVED: 'message_received',
     CHAT_CHANGED: 'chat_id_changed',
 } as const;
+
+/** Scope an extension tool can be offered in. */
+export type AgentToolScope = 'chat' | 'session';
+
+export interface AgentToolDefinition {
+    extensionId: string;
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    contexts: readonly AgentToolScope[];
+    enabled?: boolean;
+}
+
+export interface AgentToolContext {
+    runId: string;
+    invocationId: string;
+    callId: string;
+    signal: AbortSignal;
+}
+
+export type AgentToolExecute = (
+    args: Record<string, unknown>,
+    context: AgentToolContext,
+) => unknown | Promise<unknown>;
+
+export interface AgentToolRegistrationApi {
+    register: (definition: AgentToolDefinition, execute: AgentToolExecute) => Promise<void>;
+    setEnabled?: (toolId: string, enabled: boolean) => Promise<void>;
+}
+
+/** Agent tool registration API, when the host exposes it. */
+export function getAgentToolsApi(): AgentToolRegistrationApi | null {
+    return window.__TAURITAVERN__?.api?.agent?.tools ?? null;
+}
+
+// ───────────────────────── Agent sessions (in-app assistant) ─────────────────────────
+
+export type AgentModelContentPart =
+    | { type: 'text'; text: string }
+    | { type: string; [key: string]: unknown };
+
+export interface AgentModelMessage {
+    role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
+    parts: AgentModelContentPart[];
+    providerMetadata?: unknown;
+}
+
+export interface AgentSession {
+    id: string;
+    createdAt: string;
+    title: string | null;
+    lastUsedAt: string | null;
+}
+
+export interface AgentSessionRunHandle {
+    sessionId: string;
+    runId: string;
+    status: string;
+}
+
+export interface AgentSessionMessage {
+    seq: number;
+    runId: string;
+    createdAt: string;
+    message: AgentModelMessage;
+    origin?: { invocationId: string; round: number };
+}
+
+export interface AgentSessionsApi {
+    create: () => Promise<{ session: AgentSession }>;
+    list: () => Promise<{ sessions: AgentSession[]; activeRuns: AgentSessionRunHandle[] }>;
+    rename: (input: { sessionId: string; title: string }) => Promise<{ session: AgentSession }>;
+    read: (input: { sessionId: string; beforeSeq?: number; limit?: number }) => Promise<{
+        session: AgentSession;
+        messages: AgentSessionMessage[];
+        lastSeq: number;
+        nextBeforeSeq: number | null;
+        activeRun: AgentSessionRunHandle | null;
+    }>;
+    send: (input: {
+        sessionId: string;
+        text: string;
+        variables?: { local?: Record<string, unknown> };
+    }) => Promise<AgentSessionRunHandle>;
+}
+
+/** Agent session API (the in-app assistant), when the host exposes it. */
+export function getAgentSessionsApi(): AgentSessionsApi | null {
+    return window.__TAURITAVERN__?.api?.agent?.sessions ?? null;
+}
+
+/** Read a run's event log, used to report why a session turn ended. */
+export async function readRunTerminal(runId: string): Promise<string | null> {
+    const readEvents = window.__TAURITAVERN__?.api?.agent?.readEvents;
+    if (typeof readEvents !== 'function') return null;
+    try {
+        const { events } = await readEvents({ runId, limit: 200 });
+        for (let i = events.length - 1; i >= 0; i -= 1) {
+            const type = events[i]?.type;
+            if (typeof type === 'string' && type.startsWith('run_')) return type;
+        }
+    } catch {
+        /* diagnostics only */
+    }
+    return null;
+}
+
+/** Join the text parts of an assistant message. */
+export function assistantTextFrom(message: AgentModelMessage | undefined): string | null {
+    if (!message || message.role !== 'assistant') return null;
+    const text = (message.parts ?? [])
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+        .map((p) => p.text)
+        .join('')
+        .trim();
+    return text === '' ? null : text;
+}
 
 export function getSillyTavernContext(): SillyTavernContext | null {
     const ctx = window.SillyTavern?.getContext?.();

@@ -18,7 +18,8 @@ import { BRIDGE_KEY, type BridgeContext } from './app/context';
 import { createSettingsStore } from './app/settings-store';
 import { createShellStore } from './app/shell-store';
 import { createAppearanceStore } from './app/appearance-store';
-import { getSillyTavernContext } from './host/api';
+import { getAgentToolsApi, getSillyTavernContext } from './host/api';
+import { registerWechatTools } from './app/agent-tools';
 
 const SHELL_ROOT_ID = 'wechat-bridge-shell-root';
 const DRAWER_ROOT_ID = 'wechat-bridge-drawer-root';
@@ -110,6 +111,19 @@ async function bootstrap(): Promise<void> {
     mountShell();
     mountDrawer();
     runtime.start();
+
+    // Register Agent tools so chat runs and the in-app assistant can drive WeChat.
+    const agentTools = getAgentToolsApi();
+    if (agentTools) {
+        try {
+            await registerWechatTools(agentTools, () => settingsStore.state.value);
+            console.info('[wechat-bridge] Agent tools registered (wechat.send / wechat.read / wechat.status).');
+        } catch (err) {
+            console.error('[wechat-bridge] Agent tool registration failed:', err);
+        }
+    } else {
+        console.warn('[wechat-bridge] api.agent.tools unavailable; WeChat tools not registered.');
+    }
 
     window.addEventListener(
         'pagehide',

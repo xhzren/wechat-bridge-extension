@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useBridge } from '../app/context';
-import type { BusyPolicy, SendTiming } from '../app/settings';
+import type { BusyPolicy, DeliveryMode, SendTiming, SessionDelivery } from '../app/settings';
 
 /**
  * Settings surface.
@@ -21,6 +21,19 @@ const isPanel = computed(() => props.surface === 'panel');
 const enabled = computed({
     get: () => settings.value.enabled,
     set: (v: boolean) => updateSettings({ enabled: v }),
+});
+const mode = computed({
+    get: () => settings.value.mode,
+    set: (v: DeliveryMode) => updateSettings({ mode: v }),
+});
+
+const sessionDelivery = computed({
+    get: () => settings.value.sessionDelivery,
+    set: (v: SessionDelivery) => updateSettings({ sessionDelivery: v }),
+});
+const sessionTitle = computed({
+    get: () => settings.value.sessionTitle,
+    set: (v: string) => updateSettings({ sessionTitle: v }),
 });
 const bridgeUrl = computed({
     get: () => settings.value.bridgeUrl,
@@ -116,6 +129,45 @@ const appearanceValue = computed<string>({
         <template v-if="isPanel">
             <section class="wb-settings-group">
                 <header class="wb-group-header">
+                    <h3>投递方式</h3>
+                </header>
+                <div class="wb-settings-card wb-card-col">
+                    <div class="wb-card-copy">
+                        <strong>微信消息送到哪里</strong>
+                        <span>
+                            角色卡聊天：走当前角色，可用工作区/聊天工具。<br />
+                            应用内助手：走专属会话，可用 app.* 工具（能操作界面）。
+                        </span>
+                    </div>
+                    <select v-model="mode" class="wb-control">
+                        <option value="chat">角色卡聊天（默认）</option>
+                        <option value="session">应用内助手会话</option>
+                    </select>
+                </div>
+                <div v-if="mode === 'session'" class="wb-settings-card wb-card-col">
+                    <div class="wb-card-copy">
+                        <strong>专属会话名称</strong>
+                        <span>微信消息只进这个会话，与你手动使用的会话隔开。</span>
+                    </div>
+                    <input v-model="sessionTitle" class="wb-control" type="text" placeholder="微信" />
+                </div>
+                <div v-if="mode === 'session'" class="wb-settings-card wb-card-col">
+                    <div class="wb-card-copy">
+                        <strong>发送粒度</strong>
+                        <span>
+                            增量：助手每说一句就发一条，过程及时但会有中间话。<br />
+                            仅最终：等运行结束只发收尾答案，干净但要等。
+                        </span>
+                    </div>
+                    <select v-model="sessionDelivery" class="wb-control">
+                        <option value="stream">增量发送（默认）</option>
+                        <option value="final">仅最终答案</option>
+                    </select>
+                </div>
+            </section>
+
+            <section class="wb-settings-group">
+                <header class="wb-group-header">
                     <h3>连接</h3>
                 </header>
                 <div class="wb-settings-card wb-card-col">
@@ -165,6 +217,7 @@ const appearanceValue = computed<string>({
                         <option value="generationEnded">生成完全结束后发送</option>
                     </select>
                 </div>
+
                 <label class="wb-settings-card">
                     <div class="wb-card-copy">
                         <strong>去除思维链标签</strong>

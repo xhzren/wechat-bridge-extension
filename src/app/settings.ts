@@ -6,8 +6,27 @@ export type BusyPolicy = 'discard' | 'queue';
 
 export type SendTiming = 'afterCommands' | 'generationEnded';
 
+/**
+ * Where an inbound WeChat message is delivered.
+ *
+ * chat    - the current character chat (roleplay generation, chat-scoped tools)
+ * session - a dedicated in-app assistant session (session-scoped tools, app.*)
+ */
+export type DeliveryMode = 'chat' | 'session';
+
+/**
+ * How much of a session run reaches WeChat.
+ *
+ * final  - only the closing answer, after the run finishes
+ * stream - every assistant message as it appears (preambles included)
+ */
+export type SessionDelivery = 'final' | 'stream';
+
 export interface WechatBridgeSettings {
     enabled: boolean;
+    mode: DeliveryMode;
+    sessionTitle: string;
+    sessionDelivery: SessionDelivery;
     bridgeUrl: string;
     pollIntervalMs: number;
     busyPolicy: BusyPolicy;
@@ -18,6 +37,9 @@ export interface WechatBridgeSettings {
 
 export const DEFAULT_SETTINGS: WechatBridgeSettings = {
     enabled: true,
+    mode: 'chat',
+    sessionTitle: '微信',
+    sessionDelivery: 'stream',
     bridgeUrl: 'http://127.0.0.1:8080',
     pollIntervalMs: 3000,
     busyPolicy: 'discard',

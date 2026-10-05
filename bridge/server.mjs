@@ -33,6 +33,8 @@ const WECHAT_ACP_DIR = process.env.WECHAT_ACP_DIR || path.join(os.homedir(), '.w
 const CHANNEL_VERSION = '1.0.2';
 const POLL_TIMEOUT_MS = 38000;
 const MAX_SEEN = 500;
+/** Recent messages kept for non-destructive reads (Agent tools). */
+const MAX_HISTORY = Number(process.env.BRIDGE_MAX_HISTORY || 100);
 /** Cap the in-memory queue so a paused extension cannot flood on resume. */
 const MAX_PENDING = Number(process.env.BRIDGE_MAX_PENDING || 20);
 /** Drop queued messages older than this. */
@@ -216,6 +218,8 @@ function sendText(account, to, text, contextToken) {
 // ─────────────────────────────── runtime ───────────────────────────────
 
 const pending = [];
+/** Non-destructive view of recent messages, independent of the draining queue. */
+const history = [];
 const seen = new Set();
 let seq = 0;
 let polls = 0;
@@ -247,13 +251,16 @@ function ingest(messages) {
             state.users[from] = { lastSeen: new Date().toISOString(), contextToken: m.context_token || '' };
         }
 
-        pending.push({
+        const record = {
             id: 'wb_' + (++seq) + '_' + id,
             from,
             text,
             contextToken: m.context_token || '',
             receivedAtMs: Date.now(),
-        });
+        };
+        pending.push(record);
+        history.unshift(record);
+        if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
         added += 1;
     }
     if (added > 0) saveState(state);
@@ -369,6 +376,21 @@ app.get('/inbound', (_req, res) => {
     const messages = drainPending();
     pending.length = 0;
     res.json({ messages });
+});
+
+/**
+ * Non-destructive read of recent messages. Unlike /inbound this does NOT
+ * consume the queue, so Agent tools can inspect history without stealing
+ * messages from the extension's auto-poller.
+ */
+app.get('/messages', (req, res) => {
+    const raw = Number(req.query?.limit);
+    const limit = Number.isFinite(raw) && raw > 0 ? Math.min(Math.floor(raw), MAX_HISTORY) : 20;
+    res.json({
+        messages: history.slice(0, limit),
+        total: history.length,
+        pending: pending.length,
+    });
 });
 
 app.post('/send', async (req, res) => {
