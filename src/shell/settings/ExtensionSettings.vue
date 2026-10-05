@@ -3,5 +3,5 @@ import SettingsPane from '../../settings/SettingsPane.vue';
 </script>
 
 <template>
-  <SettingsPane />
+  <SettingsPane surface="panel" />
 </template>

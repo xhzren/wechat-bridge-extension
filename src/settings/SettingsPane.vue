@@ -3,7 +3,20 @@ import { computed } from 'vue';
 import { useBridge } from '../app/context';
 import type { BusyPolicy, SendTiming } from '../app/settings';
 
+/**
+ * Settings surface.
+ *
+ * `drawer` = Extensions-drawer surface: only the enable switch, appearance
+ *            and the panel entry point.
+ * `panel`  = floating-panel surface: connection and behaviour settings.
+ */
+const props = withDefaults(defineProps<{ surface?: 'drawer' | 'panel' }>(), {
+    surface: 'drawer',
+});
+
 const { settings, updateSettings, shell, appearance } = useBridge();
+
+const isPanel = computed(() => props.surface === 'panel');
 
 const enabled = computed({
     get: () => settings.value.enabled,
@@ -89,76 +102,78 @@ const appearanceValue = computed<string>({
 
         <section class="wb-settings-group">
             <header class="wb-group-header">
-                <h3>连接</h3>
-            </header>
-            <div class="wb-settings-card wb-card-col">
-                <div class="wb-card-copy">
-                    <strong>桥接服务地址</strong>
-                    <span>本地 bridge 服务，默认 8080。</span>
-                </div>
-                <input v-model="bridgeUrl" class="wb-control" type="text" placeholder="http://127.0.0.1:8080" />
-            </div>
-            <div class="wb-settings-card wb-card-col">
-                <div class="wb-card-copy">
-                    <strong>轮询间隔（毫秒）</strong>
-                    <span>扩展读取桥接队列的频率。</span>
-                </div>
-                <input v-model="pollIntervalMs" class="wb-control" type="number" min="1000" step="500" />
-            </div>
-        </section>
-
-        <section class="wb-settings-group">
-            <header class="wb-group-header">
-                <h3>行为</h3>
-            </header>
-            <div class="wb-settings-card wb-card-col">
-                <div class="wb-card-copy">
-                    <strong>忙碌时收到新消息</strong>
-                    <span>生成进行中时，对新的微信消息的处理方式。</span>
-                </div>
-                <select v-model="busyPolicy" class="wb-control">
-                    <option value="discard">丢弃（默认）</option>
-                    <option value="queue">排队，生成结束后处理</option>
-                </select>
-            </div>
-            <div class="wb-settings-card wb-card-col">
-                <div class="wb-card-copy">
-                    <strong>忙碌提示文案</strong>
-                    <span>丢弃模式下回给微信的提示。</span>
-                </div>
-                <input v-model="busyReplyText" class="wb-control" type="text" />
-            </div>
-            <div class="wb-settings-card wb-card-col">
-                <div class="wb-card-copy">
-                    <strong>回发时机</strong>
-                    <span>决定在生成流程的哪一步把回复发往微信。</span>
-                </div>
-                <select v-model="sendTiming" class="wb-control">
-                    <option value="afterCommands">正则/命令处理后立即发送（默认）</option>
-                    <option value="generationEnded">生成完全结束后发送</option>
-                </select>
-            </div>
-            <label class="wb-settings-card">
-                <div class="wb-card-copy">
-                    <strong>去除思维链标签</strong>
-                    <span>发送前移除 think / reasoning 等标签内容。</span>
-                </div>
-                <input v-model="stripThoughtTags" type="checkbox" />
-            </label>
-        </section>
-
-        <section class="wb-settings-group">
-            <header class="wb-group-header">
                 <h3>面板</h3>
             </header>
             <div class="wb-settings-card">
                 <div class="wb-card-copy">
                     <strong>打开控制面板</strong>
-                    <span>查看运行状态与消息记录。</span>
+                    <span>连接与行为设置、运行状态、消息记录都在面板中。</span>
                 </div>
                 <button class="wb-btn" type="button" @click="shell.openPanel()">打开</button>
             </div>
         </section>
+
+        <template v-if="isPanel">
+            <section class="wb-settings-group">
+                <header class="wb-group-header">
+                    <h3>连接</h3>
+                </header>
+                <div class="wb-settings-card wb-card-col">
+                    <div class="wb-card-copy">
+                        <strong>桥接服务地址</strong>
+                        <span>本地 bridge 服务，默认 8080。</span>
+                    </div>
+                    <input v-model="bridgeUrl" class="wb-control" type="text" placeholder="http://127.0.0.1:8080" />
+                </div>
+                <div class="wb-settings-card wb-card-col">
+                    <div class="wb-card-copy">
+                        <strong>轮询间隔（毫秒）</strong>
+                        <span>扩展读取桥接队列的频率。</span>
+                    </div>
+                    <input v-model="pollIntervalMs" class="wb-control" type="number" min="1000" step="500" />
+                </div>
+            </section>
+
+            <section class="wb-settings-group">
+                <header class="wb-group-header">
+                    <h3>行为</h3>
+                </header>
+                <div class="wb-settings-card wb-card-col">
+                    <div class="wb-card-copy">
+                        <strong>忙碌时收到新消息</strong>
+                        <span>生成进行中时，对新的微信消息的处理方式。</span>
+                    </div>
+                    <select v-model="busyPolicy" class="wb-control">
+                        <option value="discard">丢弃（默认）</option>
+                        <option value="queue">排队，生成结束后处理</option>
+                    </select>
+                </div>
+                <div class="wb-settings-card wb-card-col">
+                    <div class="wb-card-copy">
+                        <strong>忙碌提示文案</strong>
+                        <span>丢弃模式下回给微信的提示。</span>
+                    </div>
+                    <input v-model="busyReplyText" class="wb-control" type="text" />
+                </div>
+                <div class="wb-settings-card wb-card-col">
+                    <div class="wb-card-copy">
+                        <strong>回发时机</strong>
+                        <span>决定在生成流程的哪一步把回复发往微信。</span>
+                    </div>
+                    <select v-model="sendTiming" class="wb-control">
+                        <option value="afterCommands">正则/命令处理后立即发送（默认）</option>
+                        <option value="generationEnded">生成完全结束后发送</option>
+                    </select>
+                </div>
+                <label class="wb-settings-card">
+                    <div class="wb-card-copy">
+                        <strong>去除思维链标签</strong>
+                        <span>发送前移除 think / reasoning 等标签内容。</span>
+                    </div>
+                    <input v-model="stripThoughtTags" type="checkbox" />
+                </label>
+            </section>
+        </template>
     </div>
 </template>
 

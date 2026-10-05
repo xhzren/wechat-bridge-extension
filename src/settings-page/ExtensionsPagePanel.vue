@@ -24,7 +24,7 @@ const enabled = computed(() => settings.value.enabled);
         :data-wb-appearance="appearanceMode"
       >
         <p v-if="!enabled" class="wb-disabled-hint">桥接当前已关闭。</p>
-        <SettingsPane />
+        <SettingsPane surface="drawer" />
       </div>
     </div>
   </div>
