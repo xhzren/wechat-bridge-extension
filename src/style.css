@@ -1,0 +1,160 @@
+/* Design tokens adapted from the TauriTavern Creator Extension template. */
+.wb-theme-root {
+  --wb-font-sans: "Segoe UI", "Noto Sans", sans-serif;
+  --wb-font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+
+  --wb-accent-blue: #3a78c2;
+  --wb-accent-green: #4f8d5d;
+  --wb-accent-amber: #b58a47;
+  --wb-accent-red: #b65a54;
+
+  --wb-bg-0: #111111;
+  --wb-bg-1: #171717;
+  --wb-bg-2: #202020;
+  --wb-bg-3: #252525;
+  --wb-bg-sidebar: #111111;
+
+  --wb-border: #323232;
+  --wb-border-strong: #4a4a4a;
+
+  --wb-text: #ece9e1;
+  --wb-text-muted: #969089;
+  --wb-text-soft: #7f786f;
+  --wb-on-accent: #fffaf3;
+
+  --wb-surface-hover: #222222;
+  --wb-surface-active: #232c38;
+  --wb-chip-bg: rgba(255, 255, 255, 0.04);
+
+  --wb-control-bg: #131313;
+  --wb-control-border: #323232;
+  --wb-control-border-focus: #3a78c2;
+  --wb-control-placeholder: #7f786f;
+  --wb-checkbox-bg: #131313;
+  --wb-checkbox-border: #4a4a4a;
+  --wb-checkbox-checked-bg: #4f8d5d;
+  --wb-checkbox-check: #fffaf3;
+
+  --wb-accent-blue-soft-bg: rgba(58, 120, 194, 0.14);
+  --wb-accent-blue-soft-text: #8ab6ef;
+  --wb-accent-green-soft-bg: rgba(79, 141, 93, 0.14);
+  --wb-accent-green-soft-text: #9ad3a6;
+  --wb-accent-amber-soft-bg: rgba(181, 138, 71, 0.16);
+  --wb-accent-amber-soft-text: #d7b378;
+  --wb-accent-red-soft-bg: rgba(182, 90, 84, 0.12);
+  --wb-accent-red-soft-text: #f1c2bc;
+
+  --wb-bubble-button-bg: #ffffff;
+  --wb-bubble-button-text: #111111;
+  --wb-bubble-button-hover: #f0f0f0;
+
+  --wb-backdrop: rgba(0, 0, 0, 0.72);
+  --wb-shadow-panel: 0 16px 40px rgba(0, 0, 0, 0.4);
+  --wb-shadow-floating: 0 6px 20px rgba(0, 0, 0, 0.25);
+
+  --wb-scrollbar: #3a3a3a;
+  --wb-scrollbar-hover: #4a4a4a;
+
+  font-family: var(--wb-font-sans);
+  line-height: 1.5;
+  color: var(--wb-text);
+  color-scheme: dark;
+}
+
+.wb-theme-root[data-wb-appearance='day'] {
+  --wb-bg-0: #f4ede3;
+  --wb-bg-1: #fbf6ee;
+  --wb-bg-2: #f1e8dc;
+  --wb-bg-3: #e8dccd;
+  --wb-bg-sidebar: #efe3d5;
+
+  --wb-border: #d7cab7;
+  --wb-border-strong: #bcae99;
+
+  --wb-text: #2e261f;
+  --wb-text-muted: #6d6256;
+  --wb-text-soft: #8b8073;
+
+  --wb-surface-hover: #ede2d4;
+  --wb-surface-active: #e4d7c8;
+  --wb-chip-bg: rgba(70, 52, 36, 0.06);
+
+  --wb-control-bg: #f8f2e9;
+  --wb-control-border: #d7cab7;
+  --wb-control-placeholder: #938675;
+  --wb-checkbox-bg: #f8f2e9;
+  --wb-checkbox-border: #bcae99;
+  --wb-checkbox-checked-bg: #5f8c67;
+
+  --wb-bubble-button-bg: #2e261f;
+  --wb-bubble-button-text: #faf6ef;
+  --wb-bubble-button-hover: #45382d;
+
+  --wb-backdrop: rgba(58, 41, 27, 0.26);
+  --wb-shadow-panel: 0 18px 44px rgba(67, 48, 31, 0.18);
+  --wb-shadow-floating: 0 8px 22px rgba(67, 48, 31, 0.2);
+
+  --wb-scrollbar: #c5b7a4;
+  --wb-scrollbar-hover: #b4a28c;
+
+  color-scheme: light;
+}
+
+.wb-theme-root,
+.wb-theme-root * { box-sizing: border-box; }
+
+.wb-theme-root[data-wb-appearance] input[type='checkbox'] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border: 1px solid var(--wb-checkbox-border);
+  border-radius: 5px;
+  background: var(--wb-checkbox-bg);
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.wb-theme-root[data-wb-appearance] input[type='checkbox']::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  background: var(--wb-checkbox-check);
+  clip-path: polygon(14% 52%, 0 66%, 41% 100%, 100% 20%, 86% 6%, 41% 70%);
+  transform: scale(0);
+  transition: transform 0.12s ease;
+}
+
+.wb-theme-root[data-wb-appearance] input[type='checkbox']:checked {
+  background: var(--wb-checkbox-checked-bg);
+  border-color: var(--wb-checkbox-checked-bg);
+}
+
+.wb-theme-root[data-wb-appearance] input[type='checkbox']:checked::before {
+  transform: scale(1);
+}
+
+.wb-theme-root[data-wb-appearance] .wb-control {
+  font: inherit;
+  color: var(--wb-text);
+  background-color: var(--wb-control-bg);
+  border: 1px solid var(--wb-control-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.wb-theme-root[data-wb-appearance] .wb-control::placeholder {
+  color: var(--wb-control-placeholder);
+  opacity: 1;
+}
+
+.wb-theme-root ::-webkit-scrollbar { width: 8px; height: 8px; }
+.wb-theme-root ::-webkit-scrollbar-track { background: transparent; }
+.wb-theme-root ::-webkit-scrollbar-thumb { background: var(--wb-scrollbar); border-radius: 4px; }
+.wb-theme-root ::-webkit-scrollbar-thumb:hover { background: var(--wb-scrollbar-hover); }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }

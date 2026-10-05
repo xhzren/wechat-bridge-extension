@@ -1,0 +1,12 @@
+{
+    "display_name": "WeChat Bridge",
+    "author": "TauriTavern (local integration)",
+    "version": "0.1.0",
+    "description": "Bridge WeChat messages into the current SillyTavern chat and send replies back.",
+    "js": "dist/index.js",
+    "css": "dist/style.css",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "homePage": "https://github.com/Darkatse/TauriTavern"
+}
