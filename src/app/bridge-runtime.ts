@@ -3,13 +3,23 @@
  *
  * Owns the inbound/outbound loop and the busy state machine. UI components
  * only read state and call actions; all host access goes through src/host.
+ *
+ * Event timing (verified against src/script.js):
+ *   GENERATION_STARTED        - before the model call
+ *   GENERATION_AFTER_COMMANDS - BEFORE the model call; never a completion signal
+ *   MESSAGE_RECEIVED          - the assistant message is finalised into `chat`
+ *   GENERATION_ENDED          - UI unblocked
+ *
+ * The reply must therefore be read on MESSAGE_RECEIVED, not on
+ * GENERATION_AFTER_COMMANDS. Opening a chat with only a greeting also emits
+ * MESSAGE_RECEIVED with type 'first_message', which must be ignored.
  */
 import { reactive, ref, type Ref } from 'vue';
 import {
-    EVENT,
     getSillyTavernContext,
     onHostEvent,
     quoteForSlashCommand,
+    readAssistantMessageAt,
     readLastAssistantMessage,
     runSlashCommand,
     type SillyTavernContext,
@@ -38,6 +48,8 @@ export interface BridgeState {
 }
 
 const MAX_LOGS = 200;
+/** Grace period after GENERATION_ENDED before treating a run as lost. */
+const LOST_RUN_GRACE_MS = 2500;
 
 export interface BridgeRuntime {
     state: BridgeState;
@@ -47,6 +59,11 @@ export interface BridgeRuntime {
     applySettings: (next: WechatBridgeSettings) => void;
     testSend: (text: string) => Promise<void>;
     dispose: () => void;
+}
+
+/** A generation run that was started by an inbound WeChat message. */
+interface WechatRun {
+    target: string;
 }
 
 export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntime {
@@ -76,7 +93,9 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
     let inFlight = false;
     let eventsBound = false;
     const queue: InboundMessage[] = [];
-    let pendingOutboundFor: string | null = null;
+
+    /** Set only while a WeChat-triggered generation is in flight. */
+    let wechatRun: WechatRun | null = null;
 
     function enqueue(fn: () => Promise<void>): Promise<void> {
         lifecycle = lifecycle.catch(() => {}).then(fn);
@@ -108,7 +127,7 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
     /** Feed one WeChat message into the chat as a user message, then trigger. */
     async function deliverToChat(msg: InboundMessage): Promise<void> {
         if (!ctx) throw new Error('SillyTavern context unavailable');
-        pendingOutboundFor = msg.from;
+        wechatRun = { target: msg.from };
         state.busy = true;
         state.phase = 'generating';
         try {
@@ -116,15 +135,99 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
             await runSlashCommand(ctx, '/trigger');
             log('info', `Injected message from ${msg.from} and triggered generation.`);
         } catch (err) {
+            const target = wechatRun?.target;
+            wechatRun = null;
             state.busy = false;
             state.phase = 'error';
             state.lastError = String(err);
             log('error', `Injection failed: ${String(err)}`);
-            const target = pendingOutboundFor ?? undefined;
-            pendingOutboundFor = null;
-            // Surface the failure to WeChat so it is visible outside the WebView.
             void pushOutbound(`[桥接错误] 注入聊天失败：${String(err)}`, target);
         }
+    }
+
+    /** Finish the current WeChat run: send the reply, then drain the queue. */
+    function completeRun(resolveText: () => string | null): void {
+        if (!wechatRun) return;
+        const text = resolveText();
+        if (text === null) return;
+        const target = wechatRun.target;
+        wechatRun = null;
+        void enqueue(async () => {
+            await pushOutbound(text, target);
+            state.busy = false;
+            if (queue.length > 0) {
+                const next = queue.shift();
+                if (next) await deliverToChat(next);
+            }
+        });
+    }
+
+    /**
+     * MESSAGE_RECEIVED handler. `messageId` is the absolute chat index and
+     * `type` the generation type ('first_message' for an opening greeting).
+     */
+    function handleMessageReceived(messageId: unknown, type: unknown): void {
+        if (type === 'first_message') return; // greeting on chat open
+        if (!wechatRun) return; // not a WeChat-triggered run
+        if (type === 'quiet' || type === 'impersonate') return;
+        if (settings.value.sendTiming !== 'afterCommands') return; // wait for ENDED
+        if (typeof messageId !== 'number') return;
+        completeRun(() => (ctx ? readAssistantMessageAt(ctx, messageId) : null));
+    }
+
+    /** GENERATION_ENDED handler: fallback send timing plus lost-run watchdog. */
+    function handleGenerationEnded(): void {
+        if (!wechatRun) {
+            state.busy = false;
+            return;
+        }
+
+        if (settings.value.sendTiming === 'generationEnded') {
+            completeRun(() => (ctx ? readLastAssistantMessage(ctx) : null));
+            return;
+        }
+
+        // afterCommands mode: MESSAGE_RECEIVED should already have fired.
+        const scheduled = wechatRun;
+        setTimeout(() => {
+            if (wechatRun !== scheduled) return; // already completed
+            const target = scheduled.target;
+            wechatRun = null;
+            state.busy = false;
+            state.phase = 'error';
+            state.lastError = '生成结束但没有产生新的对话消息';
+            log('warn', 'Generation ended without a new assistant message.');
+            void pushOutbound('[桥接] 生成结束但没有产生新消息，请重试。', target);
+        }, LOST_RUN_GRACE_MS);
+    }
+
+    function bindHostEvents(): void {
+        if (!ctx || eventsBound) return;
+        eventsBound = true;
+
+        onHostEvent(ctx, 'GENERATION_STARTED', () => {
+            state.busy = true;
+            state.phase = 'generating';
+        });
+        onHostEvent(ctx, 'MESSAGE_RECEIVED', (messageId, type) => {
+            handleMessageReceived(messageId, type);
+        });
+        onHostEvent(ctx, 'GENERATION_ENDED', () => {
+            handleGenerationEnded();
+        });
+        onHostEvent(ctx, 'GENERATION_STOPPED', () => {
+            // User pressed stop: drop the run instead of waiting for the watchdog.
+            if (!wechatRun) {
+                state.busy = false;
+                return;
+            }
+            const target = wechatRun.target;
+            wechatRun = null;
+            state.busy = false;
+            state.phase = 'idle';
+            log('warn', 'Generation stopped by user.');
+            void pushOutbound('[桥接] 生成已被停止。', target);
+        });
     }
 
     async function pollOnce(): Promise<void> {
@@ -136,7 +239,7 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
             state.connected = true;
             for (const msg of messages) {
                 state.received += 1;
-                if (state.busy) {
+                if (state.busy || wechatRun) {
                     if (settings.value.busyPolicy === 'queue') {
                         queue.push(msg);
                         log('info', 'Busy: queued message.');
@@ -155,38 +258,6 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
         } finally {
             inFlight = false;
         }
-    }
-
-    function handleGenerated(): void {
-        if (!ctx) return;
-        const text = readLastAssistantMessage(ctx);
-        const target = pendingOutboundFor ?? undefined;
-        pendingOutboundFor = null;
-        void enqueue(async () => {
-            await pushOutbound(text, target);
-            state.busy = false;
-            if (queue.length > 0 && !state.busy) {
-                const next = queue.shift();
-                if (next) await deliverToChat(next);
-            }
-        });
-    }
-
-    function bindHostEvents(): void {
-        if (!ctx || eventsBound) return;
-        eventsBound = true;
-        onHostEvent(ctx, 'GENERATION_STARTED', () => {
-            state.busy = true;
-            state.phase = 'generating';
-        });
-        const timing = settings.value.sendTiming;
-        const completionEvent = timing === 'afterCommands' ? 'GENERATION_AFTER_COMMANDS' : 'GENERATION_ENDED';
-        onHostEvent(ctx, completionEvent as keyof typeof EVENT, () => handleGenerated());
-        onHostEvent(ctx, 'GENERATION_STOPPED', () => {
-            // A stopped generation may still have produced a message.
-            if (!state.busy) return;
-            handleGenerated();
-        });
     }
 
     function startPolling(): void {
@@ -244,7 +315,6 @@ export function createBridgeRuntime(initial: WechatBridgeSettings): BridgeRuntim
             } else if (next.enabled) {
                 client = createBridgeClient({ baseUrl: next.bridgeUrl });
                 startPolling();
-                bindHostEvents();
             }
         },
         async testSend(text: string) {

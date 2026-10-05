@@ -70,6 +70,17 @@ export function onHostEvent(
     return true;
 }
 
+/**
+ * Read the assistant (character) message at an absolute chat index.
+ * Returns null when the index is absent or the message is not an assistant one.
+ */
+export function readAssistantMessageAt(ctx: SillyTavernContext, index: number): string | null {
+    const m = ctx.chat?.[index];
+    if (!m) return null;
+    if (m.is_user || m.is_system) return null;
+    return String(m.mes ?? '');
+}
+
 /** Read the last assistant (character) message text. */
 export function readLastAssistantMessage(ctx: SillyTavernContext): string {
     for (let i = ctx.chat.length - 1; i >= 0; i -= 1) {
